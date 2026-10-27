@@ -1,13 +1,6 @@
 import asyncio
 import threading
-
-# PYTHON 3.14 FIX: Pyrogram import hone se pehle event loop set karna zaroori hai
-try:
-    loop = asyncio.get_event_loop()
-except RuntimeError:
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-
+import os
 import sqlite3
 from flask import Flask
 from pyrogram import Client, filters
@@ -23,7 +16,7 @@ def home():
 def run_flask():
     web_app.run(host="0.0.0.0", port=10000)
 
-# ==================== 2. CONFIGURATIONS & DATABASE ====================
+# ==================== 2. CONFIGURATIONS & STORAGE ====================
 API_ID = 39247243  
 API_HASH = "bee07e137cee5341cb61b73a4c3f9137"  
 BOT_TOKEN = "8905516793:AAFZ9OD8KhsmGur87euDtESNRfOuIHMx8jo"  
@@ -52,12 +45,26 @@ def add_session_to_db(session_str):
         conn.close()
 
 def get_all_sessions():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT session_string FROM sessions")
-    rows = cursor.fetchall()
-    conn.close()
-    return [row[0] for row in rows]
+    sessions_set = set()
+    
+    # 1. Load from Database
+    if os.path.exists(DB_FILE):
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT session_string FROM sessions")
+        rows = cursor.fetchall()
+        conn.close()
+        for row in rows:
+            sessions_set.add(row[0].strip())
+            
+    # 2. Load from Render Environment Variables (Permanent Storage backup)
+    env_sessions = os.getenv("SESSION_STRINGS", "")
+    if env_sessions:
+        for s in env_sessions.split(","):
+            if s.strip():
+                sessions_set.add(s.strip())
+                
+    return list(sessions_set)
 
 # Main Control Bot
 bot = Client(
@@ -78,17 +85,17 @@ def clean_chat_input(raw_input):
         raw_input = raw_input[1:]
     return raw_input
 
-# ==================== 3. BOT COMMANDS ====================
+# ==================== 3. BOT COMMANDS & FEATURES ====================
 
 @bot.on_message(filters.command("start"))
 async def start_command(client, message):
     help_text = (
         "🤖 **Userbot Control Panel**\n\n"
         "Commands:\n"
-        "1. `/login` - Phone number aur OTP se naya account add karein\n"
-        "2. `/add <session_string>` - Direct session string se add karein\n"
+        "1. `/login` - Phone number aur OTP se account add karein\n"
+        "2. `/add <session_string>` - Direct session string add karein\n"
         "3. `/list` - Saved accounts dekhein\n"
-        "4. `/join <t.me/link> <delay_secs>` - Sabhi accounts se channel join karein\n"
+        "4. `/join <channel_link> <delay_secs>` - Sabhi accounts se channel join karein\n"
     )
     await message.reply_text(help_text)
 
@@ -106,13 +113,14 @@ async def add_session(client, message):
             return
         
         session_str = args[1].strip()
-        success = add_session_to_db(session_str)
+        add_session_to_db(session_str)
         total_accounts = len(get_all_sessions())
         
-        if success:
-            await message.reply_text(f"✅ Account successfully database mein save ho gaya!\nTotal saved accounts: {total_accounts}")
-        else:
-            await message.reply_text(f"⚠️ Yeh session pehle se added hai!\nTotal saved accounts: {total_accounts}")
+        await message.reply_text(
+            f"✅ Account successfully add ho gaya!\n\n"
+            f"🔑 **Session String:**\n`{session_str}`\n\n"
+            f"📊 Total saved accounts: {total_accounts}"
+        )
     except Exception as e:
         await message.reply_text(f"❌ Error: {e}")
 
@@ -121,6 +129,7 @@ async def list_accounts(client, message):
     sessions = get_all_sessions()
     await message.reply_text(f"📊 Total Permanently Saved Accounts: **{len(sessions)}**")
 
+# Handle Login Steps (Phone -> OTP -> 2FA)
 @bot.on_message(filters.text & ~filters.command(["start", "login", "add", "list", "join"]))
 async def handle_login_steps(client, message):
     chat_id = message.chat.id
@@ -147,7 +156,7 @@ async def handle_login_steps(client, message):
         except Exception as e:
             USER_STATES.pop(chat_id, None)
             LOGIN_DATA.pop(chat_id, None)
-            await message.reply_text(f"❌ Phone Error: {e}\nDobara koshish karne ke liye `/login` likhein.")
+            await message.reply_text(f"❌ Phone Error: {e}\nDobara koshish ke liye `/login` likhein.")
 
     elif state == "WAITING_OTP":
         otp = message.text.strip().replace(" ", "")
@@ -175,7 +184,11 @@ async def handle_login_steps(client, message):
             USER_STATES.pop(chat_id, None)
             LOGIN_DATA.pop(chat_id, None)
             
-            await message.reply_text(f"🎉 Account successfully login ho gaya!\nTotal saved accounts: {len(get_all_sessions())}")
+            await message.reply_text(
+                f"🎉 Account successfully login ho gaya!\n\n"
+                f"🔑 **Session String:**\n`{session_string}`\n\n"
+                f"📊 Total saved accounts: {len(get_all_sessions())}"
+            )
         except Exception as e:
             USER_STATES.pop(chat_id, None)
             LOGIN_DATA.pop(chat_id, None)
@@ -198,12 +211,17 @@ async def handle_login_steps(client, message):
             USER_STATES.pop(chat_id, None)
             LOGIN_DATA.pop(chat_id, None)
             
-            await message.reply_text(f"🎉 2FA verified! Account successfully saved.\nTotal saved accounts: {len(get_all_sessions())}")
+            await message.reply_text(
+                f"🎉 2FA verified & account saved!\n\n"
+                f"🔑 **Session String:**\n`{session_string}`\n\n"
+                f"📊 Total saved accounts: {len(get_all_sessions())}"
+            )
         except Exception as e:
             USER_STATES.pop(chat_id, None)
             LOGIN_DATA.pop(chat_id, None)
             await message.reply_text(f"❌ Password Error: {e}\nDobara koshish ke liye `/login` use karein.")
 
+# Robust Working Join Command
 @bot.on_message(filters.command("join"))
 async def join_channels(client, message):
     sessions = get_all_sessions()
@@ -213,30 +231,73 @@ async def join_channels(client, message):
     
     args = message.text.split()
     if len(args) < 3:
-        await message.reply_text("❌ Sahi format use karein:\n`/join <t.me/channel_link> <delay_seconds>`")
+        await message.reply_text(
+            "❌ Sahi format use karein:\n"
+            "`/join <channel_link> <delay_seconds>`\n\n"
+            "**Examples:**\n"
+            "• Public: `/join https://t.me/telegram 10`\n"
+            "• Private: `/join https://t.me/+AbCdEfGh 10`"
+        )
         return
     
-    chat_input = clean_chat_input(args[1])
-    delay = int(args[2])
-    status_msg = await message.reply_text(f"🚀 `{chat_input}` par real requests bheji ja rahi hain...")
+    raw_link = args[1].strip()
+    try:
+        delay = int(args[2])
+    except ValueError:
+        await message.reply_text("❌ Delay seconds ek number hona chahiye! Example: `/join https://t.me/telegram 10`")
+        return
+    
+    status_msg = await message.reply_text(f"🚀 Total `{len(sessions)}` accounts se join process shuru ho raha hai...")
     
     success_count = 0
+    fail_count = 0
+    
     for idx, session in enumerate(sessions, start=1):
+        user_client = None
         try:
-            async with Client(f"real_user_{idx}", api_id=API_ID, api_hash=API_HASH, session_string=session) as user_client:
+            user_client = Client(
+                f"join_user_{idx}_{message.id}", 
+                api_id=API_ID, 
+                api_hash=API_HASH, 
+                session_string=session, 
+                in_memory=True
+            )
+            
+            await status_msg.edit_text(f"⏳ Account {idx}/{len(sessions)} connect ho raha hai...")
+            await user_client.connect()
+            
+            await status_msg.edit_text(f"⚡ Account {idx}/{len(sessions)} channel join kar raha hai...")
+            
+            if "+" in raw_link or "joinchat" in raw_link:
+                await user_client.join_chat(raw_link)
+            else:
+                chat_input = clean_chat_input(raw_link)
                 await user_client.join_chat(chat_input)
-                success_count += 1
-                await status_msg.edit_text(f"⚡ Account {idx} ne successfully join kar liya!\nWaiting for {delay} seconds...")
+                
+            success_count += 1
+            await status_msg.edit_text(f"✅ Account {idx} ne successfully join kar liya!\n⏳ Waiting for {delay} seconds...")
+            
+            await user_client.disconnect()
             await asyncio.sleep(delay)
+            
         except Exception as e:
-            await status_msg.edit_text(f"⚠️ Account {idx} error: {e}")
+            fail_count += 1
+            if user_client and user_client.is_connected:
+                try:
+                    await user_client.disconnect()
+                except:
+                    pass
+            await message.reply_text(f"⚠️ Account {idx} Join Error: `{str(e)}`")
             await asyncio.sleep(delay)
 
-    await message.reply_text(f"✨ Task Complete! Total successful joins: {success_count}/{len(sessions)}")
+    await message.reply_text(
+        f"✨ **Task Complete!**\n\n"
+        f"✅ Successful Joins: {success_count}\n"
+        f"❌ Failed Joins: {fail_count}"
+    )
 
-# ==================== 4. EXECUTION ====================
+# ==================== 4. MAIN EXECUTION ====================
 if __name__ == "__main__":
-    # Start Flask in background thread
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
