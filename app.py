@@ -49,7 +49,7 @@ def init_db():
 
 init_db()
 
-# --- ADMIN MANAGEMENT (Bot se hi handle hoga) ---
+# --- ADMIN MANAGEMENT ---
 def is_owner_or_admin(user_id):
     if user_id == OWNER_ID:
         return True
@@ -62,7 +62,6 @@ def is_owner_or_admin(user_id):
     if res:
         return True
 
-    # Fallback to Env variable if set
     env_admins = os.getenv("ADMIN_IDS", "")
     if env_admins:
         for aid in env_admins.split(","):
@@ -102,7 +101,7 @@ def get_all_admins():
                 
     return list(admins_set)
 
-# --- ACCOUNT MANAGEMENT (Bot se hi handle hoga) ---
+# --- ACCOUNT MANAGEMENT ---
 def add_session_to_db(session_str):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -190,7 +189,7 @@ async def add_admin_command(client, message):
         new_id = int(args[1])
         success = add_admin_to_db(new_id)
         if success:
-            await message.reply_text(f"✅ User `{new_id}` ko successfully database mein Admin bana diya gaya hai! Ab woh bot ki sabhi commands use kar sakta hai.")
+            await message.reply_text(f"✅ User `{new_id}` ko successfully database mein Admin bana diya gaya hai!")
         else:
             await message.reply_text("⚠️ Yeh user pehle se admin hai ya koi error aaya.")
     except ValueError:
@@ -340,19 +339,25 @@ async def join_vc_command(client, message):
         return
     args = message.text.split()
     if len(args) < 2:
-        await message.reply_text("❌ Format: `/joinc <channel_link>`")
+        await message.reply_text("❌ Format: `/joinc <channel_username_or_link>`")
         return
     
     raw_link = args[1].strip()
-    status_msg = await message.reply_text(f"🎙️ `{len(sessions)}` accounts se Voice Chat join ho rahi hai...")
+    status_msg = await message.reply_text(f"🎙️ `{len(sessions)}` accounts se Voice Chat join ki ja rahi hai...")
     
     success, fail = 0, 0
     for idx, session in enumerate(sessions, start=1):
         try:
             uc = Client(f"vc_j_{idx}_{message.id}", api_id=API_ID, api_hash=API_HASH, session_string=session, in_memory=True)
             await uc.connect()
-            chat = await uc.get_chat(clean_chat_input(raw_link))
-            peer = await uc.resolve_peer(chat.id)
+            
+            if "+" in raw_link or "joinchat" in raw_link:
+                chat = await uc.join_chat(raw_link)
+                peer = await uc.resolve_peer(chat.id)
+            else:
+                username = clean_chat_input(raw_link)
+                chat = await uc.get_chat(username)
+                peer = await uc.resolve_peer(chat.id)
             
             await uc.invoke(JoinGroupCall(
                 peer=InputPeerChannel(channel_id=peer.channel_id, access_hash=peer.access_hash),
@@ -361,12 +366,18 @@ async def join_vc_command(client, message):
                 invite_hash=""
             ))
             success += 1
-            await status_msg.edit_text(f"🎙️ Account {idx} VC joined!")
+            await status_msg.edit_text(f"🎙️ Account {idx} VC joined successfully!")
             await uc.disconnect()
             await asyncio.sleep(2)
         except Exception as e:
             fail += 1
             await message.reply_text(f"⚠️ Account {idx} VC Error: `{e}`")
+            try:
+                await uc.disconnect()
+            except:
+                pass
+            await asyncio.sleep(2)
+            
     await message.reply_text(f"✨ VC Join Complete!\n✅ Success: {success}\n❌ Failed: {fail}")
 
 @bot.on_message(filters.command("leavec"))
@@ -378,45 +389,4 @@ async def leave_vc_command(client, message):
         await message.reply_text("❌ Pehle accounts add karein.")
         return
     args = message.text.split()
-    if len(args) < 2:
-        await message.reply_text("❌ Format: `/leavec <channel_link>`")
-        return
-    
-    raw_link = args[1].strip()
-    status_msg = await message.reply_text(f"🔇 `{len(sessions)}` accounts se Voice Chat leave ho rahi hai...")
-    
-    success, fail = 0, 0
-    for idx, session in enumerate(sessions, start=1):
-        try:
-            uc = Client(f"vc_l_{idx}_{message.id}", api_id=API_ID, api_hash=API_HASH, session_string=session, in_memory=True)
-            await uc.connect()
-            chat = await uc.get_chat(clean_chat_input(raw_link))
-            peer = await uc.resolve_peer(chat.id)
-            
-            await uc.invoke(LeaveGroupCall(
-                peer=InputPeerChannel(channel_id=peer.channel_id, access_hash=peer.access_hash),
-                call=await uc.resolve_peer(chat.id)
-            ))
-            success += 1
-            await status_msg.edit_text(f"🔇 Account {idx} VC left!")
-            await uc.disconnect()
-            await asyncio.sleep(2)
-        except Exception as e:
-            fail += 1
-            await uc.disconnect()
-    await message.reply_text(f"✨ VC Leave Complete!")
-
-# ==================== 4. EXECUTION ====================
-if __name__ == "__main__":
-    flask_thread = threading.Thread(target=run_flask)
-    flask_thread.daemon = True
-    flask_thread.start()
-    print("Flask web server running on port 10000...")
-
-    ping_thread = threading.Thread(target=self_ping)
-    ping_thread.daemon = True
-    ping_thread.start()
-    print("Self-ping loop started...")
-
-    print("Telegram Control Bot starting...")
-    bot.run()
+    if
