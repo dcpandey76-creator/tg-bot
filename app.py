@@ -35,8 +35,8 @@ API_ID = 39247243
 API_HASH = "bee07e137cee5341cb61b73a4c3f9137"  
 BOT_TOKEN = "8905516793:AAFZ9OD8KhsmGur87euDtESNRfOuIHMx8jo"  
 
-# ⚠️ Yahan apni Telegram User ID daal dena
-OWNER_ID = 7468641199  
+# 👑 Teri Original Telegram User ID
+OWNER_ID = 5406594181  
 
 DB_FILE = "accounts.db"
 
@@ -371,7 +371,7 @@ async def leave_vc_command(client, message):
             
             await uc.invoke(LeaveGroupCall(
                 peer=InputPeerChannel(channel_id=peer.channel_id, access_hash=peer.access_hash),
-                call=await uc.resolve_peer(chat.id) # fallback group call ref
+                call=await uc.resolve_peer(chat.id)
             ))
             success += 1
             await status_msg.edit_text(f"🔇 Account {idx} VC left successfully!")
@@ -379,19 +379,16 @@ async def leave_vc_command(client, message):
             await asyncio.sleep(2)
         except Exception as e:
             fail += 1
-            # Agar group call pehle se connected nahi hai ya already left hai
             await uc.disconnect()
     await message.reply_text(f"✨ VC Leave Complete!")
 
 # ==================== 4. EXECUTION ====================
 if __name__ == "__main__":
-    # Flask Web Server Thread
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
     print("Flask web server running on port 10000...")
 
-    # Self-Ping Thread (Prevents Render from Sleeping)
     ping_thread = threading.Thread(target=self_ping)
     ping_thread.daemon = True
     ping_thread.start()
