@@ -34,7 +34,7 @@ API_ID = 39247243
 API_HASH = "bee07e137cee5341cb61b73a4c3f9137"  
 BOT_TOKEN = "8905516793:AAFZ9OD8KhsmGur87euDtESNRfOuIHMx8jo"  
 
-# 👑 Teri Original Telegram User ID (Always Owner)
+# 👑 Teri Original Telegram User ID
 OWNER_ID = 5406594181  
 
 DB_FILE = "accounts.db"
@@ -389,4 +389,48 @@ async def leave_vc_command(client, message):
         await message.reply_text("❌ Pehle accounts add karein.")
         return
     args = message.text.split()
-    if
+    if len(args) < 2:
+        await message.reply_text("❌ Format: `/leavec <channel_link>`")
+        return
+    
+    raw_link = args[1].strip()
+    status_msg = await message.reply_text(f"🔇 `{len(sessions)}` accounts se Voice Chat leave ho rahi hai...")
+    
+    success, fail = 0, 0
+    for idx, session in enumerate(sessions, start=1):
+        try:
+            uc = Client(f"vc_l_{idx}_{message.id}", api_id=API_ID, api_hash=API_HASH, session_string=session, in_memory=True)
+            await uc.connect()
+            chat = await uc.get_chat(clean_chat_input(raw_link))
+            peer = await uc.resolve_peer(chat.id)
+            
+            await uc.invoke(LeaveGroupCall(
+                peer=InputPeerChannel(channel_id=peer.channel_id, access_hash=peer.access_hash),
+                call=await uc.resolve_peer(chat.id)
+            ))
+            success += 1
+            await status_msg.edit_text(f"🔇 Account {idx} VC left!")
+            await uc.disconnect()
+            await asyncio.sleep(2)
+        except Exception as e:
+            fail += 1
+            try:
+                await uc.disconnect()
+            except:
+                pass
+    await message.reply_text(f"✨ VC Leave Complete!")
+
+# ==================== 4. EXECUTION ====================
+if __name__ == "__main__":
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
+    print("Flask web server running on port 10000...")
+
+    ping_thread = threading.Thread(target=self_ping)
+    ping_thread.daemon = True
+    ping_thread.start()
+    print("Self-ping loop started...")
+
+    print("Telegram Control Bot starting...")
+    bot.run()
