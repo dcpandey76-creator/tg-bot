@@ -10,7 +10,7 @@ from pyrogram.errors import SessionPasswordNeeded
 from pyrogram.raw.functions.phone import JoinGroupCall, LeaveGroupCall
 from pyrogram.raw.types import InputPeerChannel
 
-# ==================== 1. FLASK WEB SERVER & SELF-PING (24/7 Alive) ====================
+# ==================== 1. FLASK WEB SERVER & SELF-PING ====================
 web_app = Flask(__name__)
 
 @web_app.route('/')
@@ -21,11 +21,10 @@ def run_flask():
     web_app.run(host="0.0.0.0", port=10000)
 
 def self_ping():
-    """Render server ko sone nahi dega (Har 4 minute mein khud ko ping karega)"""
     render_url = os.getenv("RENDER_EXTERNAL_URL", "http://localhost:10000")
     while True:
         try:
-            time.sleep(240)  # 4 minutes
+            time.sleep(240)
             requests.get(render_url)
         except Exception:
             pass
@@ -53,41 +52,65 @@ init_db()
 def is_owner_or_admin(user_id):
     if user_id == OWNER_ID:
         return True
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id FROM admins WHERE user_id = ?", (user_id,))
-    res = cursor.fetchone()
-    conn.close()
-    return res is not None
+    
+    # 1. Check from Database
+    if os.path.exists(DB_FILE):
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id FROM admins WHERE user_id = ?", (user_id,))
+        res = cursor.fetchone()
+        conn.close()
+        if res:
+            return True
+
+    # 2. Check from Render Environment Variables (Permanent backup)
+    env_admins = os.getenv("ADMIN_IDS", "")
+    if env_admins:
+        for aid in env_admins.split(","):
+            if aid.strip() and int(aid.strip()) == user_id:
+                return True
+
+    return False
 
 def add_admin_to_db(user_id):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     try:
-        cursor.execute("INSERT INTO admins (user_id) VALUES (?)", (user_id,))
+        cursor.execute("INSERT OR IGNORE INTO admins (user_id) VALUES (?)", (user_id,))
         conn.commit()
         return True
-    except sqlite3.IntegrityError:
+    except Exception:
         return False
     finally:
         conn.close()
 
 def get_all_admins():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id FROM admins")
-    rows = cursor.fetchall()
-    conn.close()
-    return [row[0] for row in rows]
+    admins_set = {OWNER_ID}
+    if os.path.exists(DB_FILE):
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id FROM admins")
+        rows = cursor.fetchall()
+        conn.close()
+        for row in rows:
+            admins_set.add(row[0])
+            
+    env_admins = os.getenv("ADMIN_IDS", "")
+    if env_admins:
+        for aid in env_admins.split(","):
+            if aid.strip():
+                admins_set.add(int(aid.strip()))
+                
+    return list(admins_set)
 
 def add_session_to_db(session_str):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     try:
-        cursor.execute("INSERT INTO sessions (session_string) VALUES (?)", (session_str,))
+        cursor.execute("INSERT OR IGNORE INTO sessions (session_string) VALUES (?)", (session_str,))
         conn.commit()
         return True
-    except sqlite3.IntegrityError:
+    except Exception:
         return False  
     finally:
         conn.close()
@@ -148,34 +171,38 @@ async def start_command(client, message):
         "5. `/joinc <link>` - Voice Chat (VC) join karein\n"
         "6. `/leavec <link>` - Voice Chat (VC) leave karein\n"
         "7. `/addadmin <user_id>` - Admin add karein (**Owner Only**)\n"
-        "8. `/admins` - Admins list dekhein\n"
+        "8. `/admins` - Admins list dekhein\n\n"
+        "💡 *Tip: Accounts ya Admins ko hamesha ke liye secure rakhne ke liye unhe Render Environment Variables (`SESSION_STRINGS` & `ADMIN_IDS`) mein bhi daal dein!*"
     )
     await message.reply_text(help_text)
 
 @bot.on_message(filters.command("addadmin"))
 async def add_admin_command(client, message):
     if message.from_user.id != OWNER_ID:
-        await message.reply_text("⛔ Yeh command sirf Owner ke liye hai!")
+        await message.reply_text("⛔ Yeh command sirf Bot ke Owner ke liye hai!")
         return
+    
     args = message.text.split()
     if len(args) < 2:
-        await message.reply_text("❌ Format: `/addadmin <user_id>`")
+        await message.reply_text("❌ Sahi format use karein:\n`/addadmin <user_id>`")
         return
+    
     try:
         new_id = int(args[1])
-        if add_admin_to_db(new_id):
-            await message.reply_text(f"✅ User `{new_id}` ko admin bana diya gaya hai!")
-        else:
-            await message.reply_text("⚠️ Yeh user pehle se admin hai!")
+        add_admin_to_db(new_id)
+        await message.reply_text(
+            f"✅ User `{new_id}` ko database mein Admin bana diya gaya hai!\n\n"
+            f"💡 **Permanent fix ke liye:** Is ID ko Render Environment Variables mein `ADMIN_IDS` ke andar comma (`,`) lagakar save kar lein taaki server restart hone par bhi na ude."
+        )
     except ValueError:
-        await message.reply_text("❌ User ID number honi chahiye!")
+        await message.reply_text("❌ User ID ek number honi chahiye!")
 
 @bot.on_message(filters.command("admins"))
 async def list_admins_command(client, message):
     if not is_owner_or_admin(message.from_user.id):
         return
     admins = get_all_admins()
-    await message.reply_text(f"👑 **Owner ID:** `{OWNER_ID}`\n👥 **Admins:** `{admins}`")
+    await message.reply_text(f"👑 **Owner ID:** `{OWNER_ID}`\n👥 **All Active Admins:** `{admins}`")
 
 @bot.on_message(filters.command("login"))
 async def login_command(client, message):
@@ -195,7 +222,11 @@ async def add_session(client, message):
             return
         session_str = args[1].strip()
         add_session_to_db(session_str)
-        await message.reply_text(f"✅ Account added! Total: {len(get_all_sessions())}")
+        await message.reply_text(
+            f"✅ Account successfully add ho gaya!\n\n"
+            f"🔑 **Session String (Ise Render ke `SESSION_STRINGS` env variable mein daal dein taaki kabhi na ude):**\n`{session_str}`\n\n"
+            f"📊 Total Active Accounts: {len(get_all_sessions())}"
+        )
     except Exception as e:
         await message.reply_text(f"❌ Error: {e}")
 
@@ -249,7 +280,10 @@ async def handle_login_steps(client, message):
             add_session_to_db(session_string)
             USER_STATES.pop(chat_id, None)
             LOGIN_DATA.pop(chat_id, None)
-            await message.reply_text(f"🎉 Login Success!\n🔑 Session: `{session_string}`")
+            await message.reply_text(
+                f"🎉 Login Success!\n\n"
+                f"🔑 **Session String (Ise copy karke Render ke `SESSION_STRINGS` mein daal de):**\n`{session_string}`"
+            )
         except Exception as e:
             USER_STATES.pop(chat_id, None)
             LOGIN_DATA.pop(chat_id, None)
@@ -264,7 +298,10 @@ async def handle_login_steps(client, message):
             add_session_to_db(session_string)
             USER_STATES.pop(chat_id, None)
             LOGIN_DATA.pop(chat_id, None)
-            await message.reply_text(f"🎉 2FA Success & Saved!\n🔑 Session: `{session_string}`")
+            await message.reply_text(
+                f"🎉 2FA Success & Saved!\n\n"
+                f"🔑 **Session String (Ise copy karke Render ke `SESSION_STRINGS` mein daal de):**\n`{session_string}`"
+            )
         except Exception as e:
             USER_STATES.pop(chat_id, None)
             LOGIN_DATA.pop(chat_id, None)
@@ -304,8 +341,6 @@ async def join_channels(client, message):
             await asyncio.sleep(delay)
     await message.reply_text(f"✨ Complete! Success: {success}, Failed: {fail}")
 
-# ==================== VOICE CHAT (VC) COMMANDS ====================
-
 @bot.on_message(filters.command("joinc"))
 async def join_vc_command(client, message):
     if not is_owner_or_admin(message.from_user.id):
@@ -316,11 +351,11 @@ async def join_vc_command(client, message):
         return
     args = message.text.split()
     if len(args) < 2:
-        await message.reply_text("❌ Format: `/joinc <channel_link_or_username>`")
+        await message.reply_text("❌ Format: `/joinc <channel_link>`")
         return
     
     raw_link = args[1].strip()
-    status_msg = await message.reply_text(f"🎙️ `{len(sessions)}` accounts se Voice Chat join ki ja rahi hai...")
+    status_msg = await message.reply_text(f"🎙️ `{len(sessions)}` accounts se Voice Chat join ho rahi hai...")
     
     success, fail = 0, 0
     for idx, session in enumerate(sessions, start=1):
@@ -337,7 +372,7 @@ async def join_vc_command(client, message):
                 invite_hash=""
             ))
             success += 1
-            await status_msg.edit_text(f"🎙️ Account {idx} VC joined successfully!")
+            await status_msg.edit_text(f"🎙️ Account {idx} VC joined!")
             await uc.disconnect()
             await asyncio.sleep(2)
         except Exception as e:
@@ -355,11 +390,11 @@ async def leave_vc_command(client, message):
         return
     args = message.text.split()
     if len(args) < 2:
-        await message.reply_text("❌ Format: `/leavec <channel_link_or_username>`")
+        await message.reply_text("❌ Format: `/leavec <channel_link>`")
         return
     
     raw_link = args[1].strip()
-    status_msg = await message.reply_text(f"🔇 `{len(sessions)}` accounts se Voice Chat leave ki ja rahi hai...")
+    status_msg = await message.reply_text(f"🔇 `{len(sessions)}` accounts se Voice Chat leave ho rahi hai...")
     
     success, fail = 0, 0
     for idx, session in enumerate(sessions, start=1):
@@ -374,7 +409,7 @@ async def leave_vc_command(client, message):
                 call=await uc.resolve_peer(chat.id)
             ))
             success += 1
-            await status_msg.edit_text(f"🔇 Account {idx} VC left successfully!")
+            await status_msg.edit_text(f"🔇 Account {idx} VC left!")
             await uc.disconnect()
             await asyncio.sleep(2)
         except Exception as e:
@@ -392,7 +427,7 @@ if __name__ == "__main__":
     ping_thread = threading.Thread(target=self_ping)
     ping_thread.daemon = True
     ping_thread.start()
-    print("Self-ping loop started to keep bot 24/7 alive...")
+    print("Self-ping loop started...")
 
     print("Telegram Control Bot starting...")
     bot.run()
