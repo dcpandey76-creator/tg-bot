@@ -6,15 +6,13 @@ from flask import Flask
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import SessionPasswordNeeded, PhoneCodeInvalid, PhoneCodeExpired
-from pytgcalls import PyTgCalls
-from pytgcalls.types import AudioPiped
 
 # ==================== 1. FLASK WEB SERVER (Render 24/7 Alive) ====================
 web_app = Flask(__name__)
 
 @web_app.route('/')
 def home():
-    return "Real Multi-Account Userbot & VC Bot is Live and Running!"
+    return "Telegram Multi-Account Userbot is Live and Running!"
 
 def run_flask():
     web_app.run(host="0.0.0.0", port=10000)
@@ -24,7 +22,7 @@ API_ID = 39247243
 API_HASH = "bee07e137cee5341cb61b73a4c3f9137"  
 BOT_TOKEN = "8905516793:AAFZ9OD8KhsmGur87euDtESNRfOuIHMx8jo"  
 
-# Database Setup for Permanent Account Storage (Safe from Render restarts)
+# Database Setup for Permanent Account Storage
 DB_FILE = "accounts.db"
 
 def init_db():
@@ -82,13 +80,12 @@ def clean_chat_input(raw_input):
 @bot.on_message(filters.command("start"))
 async def start_command(client, message):
     help_text = (
-        "🤖 **Interactive Userbot & VC Control Panel**\n\n"
+        "🤖 **Userbot Control Panel**\n\n"
         "Commands:\n"
         "1. `/login` - Bot ke andar phone number aur OTP se naya account add karein\n"
         "2. `/add <session_string>` - Direct session string se add karein\n"
         "3. `/list` - Added accounts ki total sankhya dekhein\n"
         "4. `/join <t.me/link> <delay_secs>` - Sabhi accounts se channel join karein\n"
-        "5. `/vc <t.me/link>` - First account se Voice Chat join karein\n"
     )
     await message.reply_text(help_text)
 
@@ -123,7 +120,7 @@ async def list_accounts(client, message):
     await message.reply_text(f"📊 Total Permanently Saved Accounts: **{len(sessions)}**")
 
 # Handle Text Inputs for Interactive Login (Phone -> OTP -> 2FA)
-@bot.on_message(filters.text & ~filters.command(["start", "login", "add", "list", "join", "vc"]))
+@bot.on_message(filters.text & ~filters.command(["start", "login", "add", "list", "join"]))
 async def handle_login_steps(client, message):
     chat_id = message.chat.id
     state = USER_STATES.get(chat_id)
@@ -241,40 +238,6 @@ async def join_channels(client, message):
             await asyncio.sleep(delay)
 
     await message.reply_text(f"✨ Task Complete! Total successful joins: {success_count}/{len(sessions)}")
-
-# Real Voice Chat (VC) Join Feature
-@bot.on_message(filters.command("vc"))
-async def join_voice_chat(client, message):
-    sessions = get_all_sessions()
-    if not sessions:
-        await message.reply_text("❌ Koi account saved nahi hai VC join karne ke liye.")
-        return
-    
-    args = message.text.split()
-    if len(args) < 2:
-        await message.reply_text("❌ Format: `/vc <t.me/group_link_or_id>`")
-        return
-    
-    target_chat = clean_chat_input(args[1])
-    if target_chat.startswith("-100"):
-        target_chat = int(target_chat)
-
-    await message.reply_text("🎙️ Real Voice Chat connect ki ja rahi hai...")
-    
-    try:
-        user_client = Client("vc_real_account", api_id=API_ID, api_hash=API_HASH, session_string=sessions[0])
-        await user_client.start()
-        
-        call_py = PyTgCalls(user_client)
-        await call_py.start()
-        
-        await call_py.join_group_call(
-            target_chat,
-            AudioPiped("https://raw.githubusercontent.com/Anonytec/VoiceChatBot/master/assets/silent.raw")
-        )
-        await message.reply_text(f"✅ Successfully Voice Chat join ho gayi `{target_chat}` par!")
-    except Exception as e:
-        await message.reply_text(f"❌ VC Join Error: {e}")
 
 # ==================== 4. MAIN THREAD EXECUTION ====================
 if __name__ == "__main__":
