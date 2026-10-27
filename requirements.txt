@@ -1,7 +1,6 @@
 pyrogram==2.0.106
 tgcrypto
-pytgcalls>=3.0.0
+pytgcalls==2.1.0
 flask
 requests
 gunicorn
-
