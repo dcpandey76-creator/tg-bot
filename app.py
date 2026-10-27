@@ -34,7 +34,7 @@ API_ID = 39247243
 API_HASH = "bee07e137cee5341cb61b73a4c3f9137"  
 BOT_TOKEN = "8905516793:AAFZ9OD8KhsmGur87euDtESNRfOuIHMx8jo"  
 
-# 👑 Teri Original Telegram User ID
+# 👑 Teri Original Telegram User ID (Always Owner)
 OWNER_ID = 5406594181  
 
 DB_FILE = "accounts.db"
@@ -49,21 +49,20 @@ def init_db():
 
 init_db()
 
+# --- ADMIN MANAGEMENT (Bot se hi handle hoga) ---
 def is_owner_or_admin(user_id):
     if user_id == OWNER_ID:
         return True
     
-    # 1. Check from Database
-    if os.path.exists(DB_FILE):
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("SELECT user_id FROM admins WHERE user_id = ?", (user_id,))
-        res = cursor.fetchone()
-        conn.close()
-        if res:
-            return True
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id FROM admins WHERE user_id = ?", (user_id,))
+    res = cursor.fetchone()
+    conn.close()
+    if res:
+        return True
 
-    # 2. Check from Render Environment Variables (Permanent backup)
+    # Fallback to Env variable if set
     env_admins = os.getenv("ADMIN_IDS", "")
     if env_admins:
         for aid in env_admins.split(","):
@@ -103,6 +102,7 @@ def get_all_admins():
                 
     return list(admins_set)
 
+# --- ACCOUNT MANAGEMENT (Bot se hi handle hoga) ---
 def add_session_to_db(session_str):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -153,7 +153,7 @@ def clean_chat_input(raw_input):
         raw_input = raw_input[1:]
     return raw_input
 
-# ==================== 3. BOT COMMANDS & FEATURES ====================
+# ==================== 3. BOT COMMANDS ====================
 
 @bot.on_message(filters.command("start"))
 async def start_command(client, message):
@@ -162,7 +162,7 @@ async def start_command(client, message):
         return
 
     help_text = (
-        "🤖 **Secure Userbot Control Panel**\n\n"
+        "🤖 **Userbot Control Panel (Fully Bot-Managed)**\n\n"
         "Commands:\n"
         "1. `/login` - Phone & OTP se account add karein\n"
         "2. `/add <session>` - Direct session add karein\n"
@@ -170,9 +170,8 @@ async def start_command(client, message):
         "4. `/join <link> <delay>` - Channel join karein\n"
         "5. `/joinc <link>` - Voice Chat (VC) join karein\n"
         "6. `/leavec <link>` - Voice Chat (VC) leave karein\n"
-        "7. `/addadmin <user_id>` - Admin add karein (**Owner Only**)\n"
-        "8. `/admins` - Admins list dekhein\n\n"
-        "💡 *Tip: Accounts ya Admins ko hamesha ke liye secure rakhne ke liye unhe Render Environment Variables (`SESSION_STRINGS` & `ADMIN_IDS`) mein bhi daal dein!*"
+        "7. `/addadmin <user_id>` - Direct admin banayein (**Owner Only**)\n"
+        "8. `/admins` - Sabhi admins ki list dekhein\n"
     )
     await message.reply_text(help_text)
 
@@ -189,11 +188,11 @@ async def add_admin_command(client, message):
     
     try:
         new_id = int(args[1])
-        add_admin_to_db(new_id)
-        await message.reply_text(
-            f"✅ User `{new_id}` ko database mein Admin bana diya gaya hai!\n\n"
-            f"💡 **Permanent fix ke liye:** Is ID ko Render Environment Variables mein `ADMIN_IDS` ke andar comma (`,`) lagakar save kar lein taaki server restart hone par bhi na ude."
-        )
+        success = add_admin_to_db(new_id)
+        if success:
+            await message.reply_text(f"✅ User `{new_id}` ko successfully database mein Admin bana diya gaya hai! Ab woh bot ki sabhi commands use kar sakta hai.")
+        else:
+            await message.reply_text("⚠️ Yeh user pehle se admin hai ya koi error aaya.")
     except ValueError:
         await message.reply_text("❌ User ID ek number honi chahiye!")
 
@@ -202,7 +201,7 @@ async def list_admins_command(client, message):
     if not is_owner_or_admin(message.from_user.id):
         return
     admins = get_all_admins()
-    await message.reply_text(f"👑 **Owner ID:** `{OWNER_ID}`\n👥 **All Active Admins:** `{admins}`")
+    await message.reply_text(f"👑 **Owner ID:** `{OWNER_ID}`\n👥 **Active Admins:** `{admins}`")
 
 @bot.on_message(filters.command("login"))
 async def login_command(client, message):
@@ -222,11 +221,7 @@ async def add_session(client, message):
             return
         session_str = args[1].strip()
         add_session_to_db(session_str)
-        await message.reply_text(
-            f"✅ Account successfully add ho gaya!\n\n"
-            f"🔑 **Session String (Ise Render ke `SESSION_STRINGS` env variable mein daal dein taaki kabhi na ude):**\n`{session_str}`\n\n"
-            f"📊 Total Active Accounts: {len(get_all_sessions())}"
-        )
+        await message.reply_text(f"✅ Account successfully database mein save ho gaya!\n📊 Total Active Accounts: {len(get_all_sessions())}")
     except Exception as e:
         await message.reply_text(f"❌ Error: {e}")
 
@@ -280,10 +275,7 @@ async def handle_login_steps(client, message):
             add_session_to_db(session_string)
             USER_STATES.pop(chat_id, None)
             LOGIN_DATA.pop(chat_id, None)
-            await message.reply_text(
-                f"🎉 Login Success!\n\n"
-                f"🔑 **Session String (Ise copy karke Render ke `SESSION_STRINGS` mein daal de):**\n`{session_string}`"
-            )
+            await message.reply_text(f"🎉 Login Success & Account Saved in DB!\n📊 Total Accounts: {len(get_all_sessions())}")
         except Exception as e:
             USER_STATES.pop(chat_id, None)
             LOGIN_DATA.pop(chat_id, None)
@@ -298,10 +290,7 @@ async def handle_login_steps(client, message):
             add_session_to_db(session_string)
             USER_STATES.pop(chat_id, None)
             LOGIN_DATA.pop(chat_id, None)
-            await message.reply_text(
-                f"🎉 2FA Success & Saved!\n\n"
-                f"🔑 **Session String (Ise copy karke Render ke `SESSION_STRINGS` mein daal de):**\n`{session_string}`"
-            )
+            await message.reply_text(f"🎉 2FA Success & Account Saved in DB!\n📊 Total Accounts: {len(get_all_sessions())}")
         except Exception as e:
             USER_STATES.pop(chat_id, None)
             LOGIN_DATA.pop(chat_id, None)
