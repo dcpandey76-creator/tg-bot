@@ -1,12 +1,16 @@
 import asyncio
 import threading
+import time
+import requests
 import os
 import sqlite3
 from flask import Flask
 from pyrogram import Client, filters
 from pyrogram.errors import SessionPasswordNeeded
+from pyrogram.raw.functions.phone import JoinGroupCall, LeaveGroupCall
+from pyrogram.raw.types import InputPeerChannel
 
-# ==================== 1. FLASK WEB SERVER (Render 24/7 Alive) ====================
+# ==================== 1. FLASK WEB SERVER & SELF-PING (24/7 Alive) ====================
 web_app = Flask(__name__)
 
 @web_app.route('/')
@@ -16,10 +20,23 @@ def home():
 def run_flask():
     web_app.run(host="0.0.0.0", port=10000)
 
+def self_ping():
+    """Render server ko sone nahi dega (Har 4 minute mein khud ko ping karega)"""
+    render_url = os.getenv("RENDER_EXTERNAL_URL", "http://localhost:10000")
+    while True:
+        try:
+            time.sleep(240)  # 4 minutes
+            requests.get(render_url)
+        except Exception:
+            pass
+
 # ==================== 2. CONFIGURATIONS & STORAGE ====================
 API_ID = 39247243  
 API_HASH = "bee07e137cee5341cb61b73a4c3f9137"  
 BOT_TOKEN = "8905516793:AAFZ9OD8KhsmGur87euDtESNRfOuIHMx8jo"  
+
+# ⚠️ Yahan apni Telegram User ID daal dena
+OWNER_ID = 7468641199  
 
 DB_FILE = "accounts.db"
 
@@ -27,10 +44,41 @@ def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute('''CREATE TABLE IF NOT EXISTS sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, session_string TEXT UNIQUE)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS admins (user_id INTEGER PRIMARY KEY)''')
     conn.commit()
     conn.close()
 
 init_db()
+
+def is_owner_or_admin(user_id):
+    if user_id == OWNER_ID:
+        return True
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id FROM admins WHERE user_id = ?", (user_id,))
+    res = cursor.fetchone()
+    conn.close()
+    return res is not None
+
+def add_admin_to_db(user_id):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("INSERT INTO admins (user_id) VALUES (?)", (user_id,))
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        conn.close()
+
+def get_all_admins():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id FROM admins")
+    rows = cursor.fetchall()
+    conn.close()
+    return [row[0] for row in rows]
 
 def add_session_to_db(session_str):
     conn = sqlite3.connect(DB_FILE)
@@ -46,8 +94,6 @@ def add_session_to_db(session_str):
 
 def get_all_sessions():
     sessions_set = set()
-    
-    # 1. Load from Database
     if os.path.exists(DB_FILE):
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
@@ -57,7 +103,6 @@ def get_all_sessions():
         for row in rows:
             sessions_set.add(row[0].strip())
             
-    # 2. Load from Render Environment Variables (Permanent Storage backup)
     env_sessions = os.getenv("SESSION_STRINGS", "")
     if env_sessions:
         for s in env_sessions.split(","):
@@ -89,219 +134,268 @@ def clean_chat_input(raw_input):
 
 @bot.on_message(filters.command("start"))
 async def start_command(client, message):
+    if not is_owner_or_admin(message.from_user.id):
+        await message.reply_text("⛔ Aap is bot ko use karne ke liye authorized nahi hain!")
+        return
+
     help_text = (
-        "🤖 **Userbot Control Panel**\n\n"
+        "🤖 **Secure Userbot Control Panel**\n\n"
         "Commands:\n"
-        "1. `/login` - Phone number aur OTP se account add karein\n"
-        "2. `/add <session_string>` - Direct session string add karein\n"
+        "1. `/login` - Phone & OTP se account add karein\n"
+        "2. `/add <session>` - Direct session add karein\n"
         "3. `/list` - Saved accounts dekhein\n"
-        "4. `/join <channel_link> <delay_secs>` - Sabhi accounts se channel join karein\n"
+        "4. `/join <link> <delay>` - Channel join karein\n"
+        "5. `/joinc <link>` - Voice Chat (VC) join karein\n"
+        "6. `/leavec <link>` - Voice Chat (VC) leave karein\n"
+        "7. `/addadmin <user_id>` - Admin add karein (**Owner Only**)\n"
+        "8. `/admins` - Admins list dekhein\n"
     )
     await message.reply_text(help_text)
 
+@bot.on_message(filters.command("addadmin"))
+async def add_admin_command(client, message):
+    if message.from_user.id != OWNER_ID:
+        await message.reply_text("⛔ Yeh command sirf Owner ke liye hai!")
+        return
+    args = message.text.split()
+    if len(args) < 2:
+        await message.reply_text("❌ Format: `/addadmin <user_id>`")
+        return
+    try:
+        new_id = int(args[1])
+        if add_admin_to_db(new_id):
+            await message.reply_text(f"✅ User `{new_id}` ko admin bana diya gaya hai!")
+        else:
+            await message.reply_text("⚠️ Yeh user pehle se admin hai!")
+    except ValueError:
+        await message.reply_text("❌ User ID number honi chahiye!")
+
+@bot.on_message(filters.command("admins"))
+async def list_admins_command(client, message):
+    if not is_owner_or_admin(message.from_user.id):
+        return
+    admins = get_all_admins()
+    await message.reply_text(f"👑 **Owner ID:** `{OWNER_ID}`\n👥 **Admins:** `{admins}`")
+
 @bot.on_message(filters.command("login"))
 async def login_command(client, message):
+    if not is_owner_or_admin(message.from_user.id):
+        return
     USER_STATES[message.chat.id] = "WAITING_PHONE"
-    await message.reply_text("📱 Kripya apne Telegram account ka phone number country code ke sath bhejein\n(Example: `+919876543210`):")
+    await message.reply_text("📱 Apne Telegram account ka phone number bhejein (Example: `+919876543210`):")
 
 @bot.on_message(filters.command("add"))
 async def add_session(client, message):
+    if not is_owner_or_admin(message.from_user.id):
+        return
     try:
         args = message.text.split(" ", 1)
         if len(args) < 2:
-            await message.reply_text("❌ Kripya session string bhi likhein.\nUsage: `/add <session_string>`")
+            await message.reply_text("❌ Usage: `/add <session_string>`")
             return
-        
         session_str = args[1].strip()
         add_session_to_db(session_str)
-        total_accounts = len(get_all_sessions())
-        
-        await message.reply_text(
-            f"✅ Account successfully add ho gaya!\n\n"
-            f"🔑 **Session String:**\n`{session_str}`\n\n"
-            f"📊 Total saved accounts: {total_accounts}"
-        )
+        await message.reply_text(f"✅ Account added! Total: {len(get_all_sessions())}")
     except Exception as e:
         await message.reply_text(f"❌ Error: {e}")
 
 @bot.on_message(filters.command("list"))
 async def list_accounts(client, message):
+    if not is_owner_or_admin(message.from_user.id):
+        return
     sessions = get_all_sessions()
-    await message.reply_text(f"📊 Total Permanently Saved Accounts: **{len(sessions)}**")
+    await message.reply_text(f"📊 Total Saved Accounts: **{len(sessions)}**")
 
-# Handle Login Steps (Phone -> OTP -> 2FA)
-@bot.on_message(filters.text & ~filters.command(["start", "login", "add", "list", "join"]))
+@bot.on_message(filters.text & ~filters.command(["start", "login", "add", "list", "join", "joinc", "leavec", "addadmin", "admins"]))
 async def handle_login_steps(client, message):
+    if not is_owner_or_admin(message.from_user.id):
+        return
     chat_id = message.chat.id
     state = USER_STATES.get(chat_id)
-    
     if not state:
         return  
     
     if state == "WAITING_PHONE":
         phone = message.text.strip()
         try:
-            status_msg = await message.reply_text("⏳ Telegram par OTP code bheja ja raha hai...")
+            status_msg = await message.reply_text("⏳ OTP bheja ja raha hai...")
             u_client = Client(f"temp_login_{chat_id}", api_id=API_ID, api_hash=API_HASH, in_memory=True)
             await u_client.connect()
             sent_code = await u_client.send_code(phone)
-            
-            LOGIN_DATA[chat_id] = {
-                "client": u_client,
-                "phone": phone,
-                "hash": sent_code.phone_code_hash
-            }
+            LOGIN_DATA[chat_id] = {"client": u_client, "phone": phone, "hash": sent_code.phone_code_hash}
             USER_STATES[chat_id] = "WAITING_OTP"
-            await status_msg.edit_text("✅ OTP bhej diya gaya hai!\nKripya apne Telegram app par aaya hua **OTP code** yahan bhejein:")
+            await status_msg.edit_text("✅ OTP bhej diya gaya hai! OTP yahan bhejein:")
         except Exception as e:
             USER_STATES.pop(chat_id, None)
             LOGIN_DATA.pop(chat_id, None)
-            await message.reply_text(f"❌ Phone Error: {e}\nDobara koshish ke liye `/login` likhein.")
+            await message.reply_text(f"❌ Error: {e}")
 
     elif state == "WAITING_OTP":
         otp = message.text.strip().replace(" ", "")
         data = LOGIN_DATA.get(chat_id)
         if not data:
-            await message.reply_text("❌ Session expired. Dobara `/login` likhein.")
             USER_STATES.pop(chat_id, None)
             return
-        
         try:
             u_client = data["client"]
-            phone = data["phone"]
-            ph_hash = data["hash"]
-            
             try:
-                await u_client.sign_in(phone, ph_hash, otp)
+                await u_client.sign_in(data["phone"], data["hash"], otp)
             except SessionPasswordNeeded:
                 USER_STATES[chat_id] = "WAITING_2FA"
-                await message.reply_text("🔒 Aapke account par 2FA Password laga hai. Apna **2FA Password** yahan bhejein:")
+                await message.reply_text("🔒 2FA Password required. Password bhejein:")
                 return
-            
             session_string = await u_client.export_session_string()
             await u_client.disconnect()
             add_session_to_db(session_string)
             USER_STATES.pop(chat_id, None)
             LOGIN_DATA.pop(chat_id, None)
-            
-            await message.reply_text(
-                f"🎉 Account successfully login ho gaya!\n\n"
-                f"🔑 **Session String:**\n`{session_string}`\n\n"
-                f"📊 Total saved accounts: {len(get_all_sessions())}"
-            )
+            await message.reply_text(f"🎉 Login Success!\n🔑 Session: `{session_string}`")
         except Exception as e:
             USER_STATES.pop(chat_id, None)
             LOGIN_DATA.pop(chat_id, None)
-            await message.reply_text(f"❌ OTP Error: {e}\nDobara koshish ke liye `/login` use karein.")
+            await message.reply_text(f"❌ OTP Error: {e}")
 
     elif state == "WAITING_2FA":
-        password = message.text.strip()
-        data = LOGIN_DATA.get(chat_id)
-        if not data:
-            await message.reply_text("❌ Session expired. Dobara `/login` likhein.")
-            USER_STATES.pop(chat_id, None)
-            return
-        
         try:
-            u_client = data["client"]
-            await u_client.check_password(password)
+            u_client = LOGIN_DATA[chat_id]["client"]
+            await u_client.check_password(message.text.strip())
             session_string = await u_client.export_session_string()
             await u_client.disconnect()
             add_session_to_db(session_string)
             USER_STATES.pop(chat_id, None)
             LOGIN_DATA.pop(chat_id, None)
-            
-            await message.reply_text(
-                f"🎉 2FA verified & account saved!\n\n"
-                f"🔑 **Session String:**\n`{session_string}`\n\n"
-                f"📊 Total saved accounts: {len(get_all_sessions())}"
-            )
+            await message.reply_text(f"🎉 2FA Success & Saved!\n🔑 Session: `{session_string}`")
         except Exception as e:
             USER_STATES.pop(chat_id, None)
             LOGIN_DATA.pop(chat_id, None)
-            await message.reply_text(f"❌ Password Error: {e}\nDobara koshish ke liye `/login` use karein.")
+            await message.reply_text(f"❌ Password Error: {e}")
 
-# Robust Working Join Command
 @bot.on_message(filters.command("join"))
 async def join_channels(client, message):
+    if not is_owner_or_admin(message.from_user.id):
+        return
     sessions = get_all_sessions()
     if not sessions:
-        await message.reply_text("❌ Pehle koi account add karein (`/login` command se).")
+        await message.reply_text("❌ Pehle accounts add karein.")
         return
-    
     args = message.text.split()
     if len(args) < 3:
-        await message.reply_text(
-            "❌ Sahi format use karein:\n"
-            "`/join <channel_link> <delay_seconds>`\n\n"
-            "**Examples:**\n"
-            "• Public: `/join https://t.me/telegram 10`\n"
-            "• Private: `/join https://t.me/+AbCdEfGh 10`"
-        )
+        await message.reply_text("❌ Format: `/join <link> <delay_seconds>`")
+        return
+    raw_link, delay = args[1].strip(), int(args[2])
+    status_msg = await message.reply_text(f"🚀 `{len(sessions)}` accounts se join shuru...")
+    
+    success, fail = 0, 0
+    for idx, session in enumerate(sessions, start=1):
+        try:
+            uc = Client(f"j_{idx}_{message.id}", api_id=API_ID, api_hash=API_HASH, session_string=session, in_memory=True)
+            await uc.connect()
+            if "+" in raw_link or "joinchat" in raw_link:
+                await uc.join_chat(raw_link)
+            else:
+                await uc.join_chat(clean_chat_input(raw_link))
+            success += 1
+            await status_msg.edit_text(f"✅ Account {idx} joined! Waiting {delay}s...")
+            await uc.disconnect()
+            await asyncio.sleep(delay)
+        except Exception as e:
+            fail += 1
+            await message.reply_text(f"⚠️ Account {idx} Error: `{e}`")
+            await asyncio.sleep(delay)
+    await message.reply_text(f"✨ Complete! Success: {success}, Failed: {fail}")
+
+# ==================== VOICE CHAT (VC) COMMANDS ====================
+
+@bot.on_message(filters.command("joinc"))
+async def join_vc_command(client, message):
+    if not is_owner_or_admin(message.from_user.id):
+        return
+    sessions = get_all_sessions()
+    if not sessions:
+        await message.reply_text("❌ Pehle accounts add karein.")
+        return
+    args = message.text.split()
+    if len(args) < 2:
+        await message.reply_text("❌ Format: `/joinc <channel_link_or_username>`")
         return
     
     raw_link = args[1].strip()
-    try:
-        delay = int(args[2])
-    except ValueError:
-        await message.reply_text("❌ Delay seconds ek number hona chahiye! Example: `/join https://t.me/telegram 10`")
+    status_msg = await message.reply_text(f"🎙️ `{len(sessions)}` accounts se Voice Chat join ki ja rahi hai...")
+    
+    success, fail = 0, 0
+    for idx, session in enumerate(sessions, start=1):
+        try:
+            uc = Client(f"vc_j_{idx}_{message.id}", api_id=API_ID, api_hash=API_HASH, session_string=session, in_memory=True)
+            await uc.connect()
+            chat = await uc.get_chat(clean_chat_input(raw_link))
+            peer = await uc.resolve_peer(chat.id)
+            
+            await uc.invoke(JoinGroupCall(
+                peer=InputPeerChannel(channel_id=peer.channel_id, access_hash=peer.access_hash),
+                muted=True,
+                video_stopped=True,
+                invite_hash=""
+            ))
+            success += 1
+            await status_msg.edit_text(f"🎙️ Account {idx} VC joined successfully!")
+            await uc.disconnect()
+            await asyncio.sleep(2)
+        except Exception as e:
+            fail += 1
+            await message.reply_text(f"⚠️ Account {idx} VC Error: `{e}`")
+    await message.reply_text(f"✨ VC Join Complete!\n✅ Success: {success}\n❌ Failed: {fail}")
+
+@bot.on_message(filters.command("leavec"))
+async def leave_vc_command(client, message):
+    if not is_owner_or_admin(message.from_user.id):
+        return
+    sessions = get_all_sessions()
+    if not sessions:
+        await message.reply_text("❌ Pehle accounts add karein.")
+        return
+    args = message.text.split()
+    if len(args) < 2:
+        await message.reply_text("❌ Format: `/leavec <channel_link_or_username>`")
         return
     
-    status_msg = await message.reply_text(f"🚀 Total `{len(sessions)}` accounts se join process shuru ho raha hai...")
+    raw_link = args[1].strip()
+    status_msg = await message.reply_text(f"🔇 `{len(sessions)}` accounts se Voice Chat leave ki ja rahi hai...")
     
-    success_count = 0
-    fail_count = 0
-    
+    success, fail = 0, 0
     for idx, session in enumerate(sessions, start=1):
-        user_client = None
         try:
-            user_client = Client(
-                f"join_user_{idx}_{message.id}", 
-                api_id=API_ID, 
-                api_hash=API_HASH, 
-                session_string=session, 
-                in_memory=True
-            )
+            uc = Client(f"vc_l_{idx}_{message.id}", api_id=API_ID, api_hash=API_HASH, session_string=session, in_memory=True)
+            await uc.connect()
+            chat = await uc.get_chat(clean_chat_input(raw_link))
+            peer = await uc.resolve_peer(chat.id)
             
-            await status_msg.edit_text(f"⏳ Account {idx}/{len(sessions)} connect ho raha hai...")
-            await user_client.connect()
-            
-            await status_msg.edit_text(f"⚡ Account {idx}/{len(sessions)} channel join kar raha hai...")
-            
-            if "+" in raw_link or "joinchat" in raw_link:
-                await user_client.join_chat(raw_link)
-            else:
-                chat_input = clean_chat_input(raw_link)
-                await user_client.join_chat(chat_input)
-                
-            success_count += 1
-            await status_msg.edit_text(f"✅ Account {idx} ne successfully join kar liya!\n⏳ Waiting for {delay} seconds...")
-            
-            await user_client.disconnect()
-            await asyncio.sleep(delay)
-            
+            await uc.invoke(LeaveGroupCall(
+                peer=InputPeerChannel(channel_id=peer.channel_id, access_hash=peer.access_hash),
+                call=await uc.resolve_peer(chat.id) # fallback group call ref
+            ))
+            success += 1
+            await status_msg.edit_text(f"🔇 Account {idx} VC left successfully!")
+            await uc.disconnect()
+            await asyncio.sleep(2)
         except Exception as e:
-            fail_count += 1
-            if user_client and user_client.is_connected:
-                try:
-                    await user_client.disconnect()
-                except:
-                    pass
-            await message.reply_text(f"⚠️ Account {idx} Join Error: `{str(e)}`")
-            await asyncio.sleep(delay)
+            fail += 1
+            # Agar group call pehle se connected nahi hai ya already left hai
+            await uc.disconnect()
+    await message.reply_text(f"✨ VC Leave Complete!")
 
-    await message.reply_text(
-        f"✨ **Task Complete!**\n\n"
-        f"✅ Successful Joins: {success_count}\n"
-        f"❌ Failed Joins: {fail_count}"
-    )
-
-# ==================== 4. MAIN EXECUTION ====================
+# ==================== 4. EXECUTION ====================
 if __name__ == "__main__":
+    # Flask Web Server Thread
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
     print("Flask web server running on port 10000...")
+
+    # Self-Ping Thread (Prevents Render from Sleeping)
+    ping_thread = threading.Thread(target=self_ping)
+    ping_thread.daemon = True
+    ping_thread.start()
+    print("Self-ping loop started to keep bot 24/7 alive...")
 
     print("Telegram Control Bot starting...")
     bot.run()
