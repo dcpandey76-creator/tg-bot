@@ -1,11 +1,9 @@
 import threading
 import asyncio
 import sqlite3
-import os
 from flask import Flask
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from pyrogram.errors import SessionPasswordNeeded, PhoneCodeInvalid, PhoneCodeExpired
+from pyrogram.errors import SessionPasswordNeeded
 
 # ==================== 1. FLASK WEB SERVER (Render 24/7 Alive) ====================
 web_app = Flask(__name__)
@@ -22,7 +20,6 @@ API_ID = 39247243
 API_HASH = "bee07e137cee5341cb61b73a4c3f9137"  
 BOT_TOKEN = "8905516793:AAFZ9OD8KhsmGur87euDtESNRfOuIHMx8jo"  
 
-# Database Setup for Permanent Account Storage
 DB_FILE = "accounts.db"
 
 def init_db():
@@ -62,11 +59,9 @@ bot = Client(
     bot_token=BOT_TOKEN
 )
 
-# Interactive Login States Memory
 USER_STATES = {}
 LOGIN_DATA = {}
 
-# Helper function to clean telegram links
 def clean_chat_input(raw_input):
     raw_input = raw_input.strip()
     if "t.me/" in raw_input:
@@ -75,21 +70,20 @@ def clean_chat_input(raw_input):
         raw_input = raw_input[1:]
     return raw_input
 
-# ==================== 3. BOT COMMANDS & FEATURES ====================
+# ==================== 3. BOT COMMANDS ====================
 
 @bot.on_message(filters.command("start"))
 async def start_command(client, message):
     help_text = (
         "🤖 **Userbot Control Panel**\n\n"
         "Commands:\n"
-        "1. `/login` - Bot ke andar phone number aur OTP se naya account add karein\n"
+        "1. `/login` - Phone number aur OTP se naya account add karein\n"
         "2. `/add <session_string>` - Direct session string se add karein\n"
-        "3. `/list` - Added accounts ki total sankhya dekhein\n"
+        "3. `/list` - Saved accounts dekhein\n"
         "4. `/join <t.me/link> <delay_secs>` - Sabhi accounts se channel join karein\n"
     )
     await message.reply_text(help_text)
 
-# --- INTERACTIVE LOGIN FLOW ---
 @bot.on_message(filters.command("login"))
 async def login_command(client, message):
     USER_STATES[message.chat.id] = "WAITING_PHONE"
@@ -105,8 +99,8 @@ async def add_session(client, message):
         
         session_str = args[1].strip()
         success = add_session_to_db(session_str)
-        
         total_accounts = len(get_all_sessions())
+        
         if success:
             await message.reply_text(f"✅ Account successfully database mein save ho gaya!\nTotal saved accounts: {total_accounts}")
         else:
@@ -119,7 +113,6 @@ async def list_accounts(client, message):
     sessions = get_all_sessions()
     await message.reply_text(f"📊 Total Permanently Saved Accounts: **{len(sessions)}**")
 
-# Handle Text Inputs for Interactive Login (Phone -> OTP -> 2FA)
 @bot.on_message(filters.text & ~filters.command(["start", "login", "add", "list", "join"]))
 async def handle_login_steps(client, message):
     chat_id = message.chat.id
@@ -165,17 +158,16 @@ async def handle_login_steps(client, message):
                 await u_client.sign_in(phone, ph_hash, otp)
             except SessionPasswordNeeded:
                 USER_STATES[chat_id] = "WAITING_2FA"
-                await message.reply_text("🔒 Aapke account par Two-Step Verification (Password) laga hai. Apna **2FA Password** yahan bhejein:")
+                await message.reply_text("🔒 Aapke account par 2FA Password laga hai. Apna **2FA Password** yahan bhejein:")
                 return
             
             session_string = await u_client.export_session_string()
             await u_client.disconnect()
-            
             add_session_to_db(session_string)
             USER_STATES.pop(chat_id, None)
             LOGIN_DATA.pop(chat_id, None)
             
-            await message.reply_text(f"🎉 Account successfully login ho gaya aur database mein save ho gaya!\nTotal saved accounts: {len(get_all_sessions())}")
+            await message.reply_text(f"🎉 Account successfully login ho gaya!\nTotal saved accounts: {len(get_all_sessions())}")
         except Exception as e:
             USER_STATES.pop(chat_id, None)
             LOGIN_DATA.pop(chat_id, None)
@@ -192,10 +184,8 @@ async def handle_login_steps(client, message):
         try:
             u_client = data["client"]
             await u_client.check_password(password)
-            
             session_string = await u_client.export_session_string()
             await u_client.disconnect()
-            
             add_session_to_db(session_string)
             USER_STATES.pop(chat_id, None)
             LOGIN_DATA.pop(chat_id, None)
@@ -206,7 +196,6 @@ async def handle_login_steps(client, message):
             LOGIN_DATA.pop(chat_id, None)
             await message.reply_text(f"❌ Password Error: {e}\nDobara koshish ke liye `/login` use karein.")
 
-# Real Channel Join with Delay & Link Parsing
 @bot.on_message(filters.command("join"))
 async def join_channels(client, message):
     sessions = get_all_sessions()
@@ -216,12 +205,11 @@ async def join_channels(client, message):
     
     args = message.text.split()
     if len(args) < 3:
-        await message.reply_text("❌ Sahi format use karein:\n`/join <t.me/channel_link> <delay_seconds>`\nExample: `/join https://t.me/telegram 10`")
+        await message.reply_text("❌ Sahi format use karein:\n`/join <t.me/channel_link> <delay_seconds>`")
         return
     
     chat_input = clean_chat_input(args[1])
     delay = int(args[2])
-    
     status_msg = await message.reply_text(f"🚀 `{chat_input}` par real requests bheji ja rahi hain...")
     
     success_count = 0
@@ -231,7 +219,6 @@ async def join_channels(client, message):
                 await user_client.join_chat(chat_input)
                 success_count += 1
                 await status_msg.edit_text(f"⚡ Account {idx} ne successfully join kar liya!\nWaiting for {delay} seconds...")
-            
             await asyncio.sleep(delay)
         except Exception as e:
             await status_msg.edit_text(f"⚠️ Account {idx} error: {e}")
@@ -239,12 +226,23 @@ async def join_channels(client, message):
 
     await message.reply_text(f"✨ Task Complete! Total successful joins: {success_count}/{len(sessions)}")
 
-# ==================== 4. MAIN THREAD EXECUTION ====================
+# ==================== 4. SAFE RUNNER (Python 3.14 Fix) ====================
 if __name__ == "__main__":
+    # Start Flask in background thread
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.daemon = True
     flask_thread.start()
     print("Flask web server running on port 10000...")
 
     print("Telegram Control Bot starting...")
-    bot.run()
+    # Safe manual loop initialization for Python 3.14
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(bot.start())
+    
+    import idle
+    # Keep bot running safely
+    try:
+        loop.run_forever()
+    except KeyboardInterrupt:
+        loop.run_until_complete(bot.stop())
