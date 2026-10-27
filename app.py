@@ -7,8 +7,8 @@ import sqlite3
 from flask import Flask
 from pyrogram import Client, filters
 from pyrogram.errors import SessionPasswordNeeded
-from pyrogram.raw.functions.phone import JoinGroupCall, LeaveGroupCall, EditGroupCallParticipant, InviteToGroupCall
-from pyrogram.raw.types import InputPeerChannel, InputGroupCall, InputUser
+from pyrogram.raw.functions.phone import JoinGroupCall, LeaveGroupCall, EditGroupCallParticipant
+from pyrogram.raw.types import InputPeerChannel, InputGroupCall
 
 # ==================== 1. FLASK WEB SERVER & SELF-PING ====================
 web_app = Flask(__name__)
@@ -161,18 +161,17 @@ async def start_command(client, message):
         return
 
     help_text = (
-        "🤖 **Secure Userbot Control Panel (All Features)**\n\n"
+        "🤖 **Secure Userbot Control Panel**\n\n"
         "Commands:\n"
         "1. `/login` - Phone & OTP se account add karein\n"
         "2. `/add <session>` - Direct session add karein\n"
         "3. `/list` - Saved accounts dekhein\n"
         "4. `/join <link> <delay>` - Channel join karein\n"
-        "5. `/joinc <link>` - Voice Chat (VC) join karein\n"
-        "6. `/leavec <link>` - Voice Chat (VC) leave karein\n"
+        "5. `/joinc <link>` - Voice Chat mein direct present ho jayein\n"
+        "6. `/leavec <link>` - Voice Chat leave karein\n"
         "7. `/unmutec <link>` - VC mein accounts ko unmute karein\n"
-        "8. `/invitec <link> <user_id_or_username>` - VC mein user invite karein\n"
-        "9. `/addadmin <user_id>` - Admin banayein (**Owner Only**)\n"
-        "10. `/admins` - Admins list dekhein\n"
+        "8. `/addadmin <user_id>` - Admin banayein (**Owner Only**)\n"
+        "9. `/admins` - Admins list dekhein\n"
     )
     await message.reply_text(help_text)
 
@@ -233,7 +232,7 @@ async def list_accounts(client, message):
     sessions = get_all_sessions()
     await message.reply_text(f"📊 Total Saved Accounts: **{len(sessions)}**")
 
-@bot.on_message(filters.text & ~filters.command(["start", "login", "add", "list", "join", "joinc", "leavec", "unmutec", "invitec", "addadmin", "admins"]))
+@bot.on_message(filters.text & ~filters.command(["start", "login", "add", "list", "join", "joinc", "leavec", "unmutec", "addadmin", "admins"]))
 async def handle_login_steps(client, message):
     if not is_owner_or_admin(message.from_user.id):
         return
@@ -349,7 +348,7 @@ async def join_vc_command(client, message):
         return
     
     raw_link = args[1].strip()
-    status_msg = await message.reply_text(f"🎙️ `{len(sessions)}` accounts se Voice Chat join ki ja rahi hai...")
+    status_msg = await message.reply_text(f"🎙️ `{len(sessions)}` accounts se Voice Chat mein present ho rahe hain...")
     
     success, fail = 0, 0
     for idx, session in enumerate(sessions, start=1):
@@ -377,14 +376,15 @@ async def join_vc_command(client, message):
                         raise ex
                 peer = await uc.resolve_peer(chat.id)
             
+            # VC Join with muted=False (direct presence)
             await uc.invoke(JoinGroupCall(
                 peer=InputPeerChannel(channel_id=peer.channel_id, access_hash=peer.access_hash),
-                muted=True,
+                muted=False,
                 video_stopped=True,
                 invite_hash=""
             ))
             success += 1
-            await status_msg.edit_text(f"🎙️ Account {idx} VC joined successfully!")
+            await status_msg.edit_text(f"🎙️ Account {idx} VC mein successfully present ho gaya!")
             await uc.disconnect()
             await asyncio.sleep(2)
         except Exception as e:
@@ -396,7 +396,7 @@ async def join_vc_command(client, message):
                 pass
             await asyncio.sleep(2)
             
-    await message.reply_text(f"✨ VC Join Complete!\n✅ Success: {success}\n❌ Failed: {fail}")
+    await message.reply_text(f"✨ VC Presence Complete!\n✅ Success: {success}\n❌ Failed: {fail}")
 
 @bot.on_message(filters.command("leavec"))
 async def leave_vc_command(client, message):
@@ -464,7 +464,6 @@ async def unmute_vc_command(client, message):
             me = await uc.get_me()
             participant_peer = await uc.resolve_peer(me.id)
             
-            # Group call active call info fetch karke unmute karna
             full_chat = await uc.get_full_chat(chat.id)
             if full_chat.call:
                 await uc.invoke(EditGroupCallParticipant(
@@ -480,45 +479,6 @@ async def unmute_vc_command(client, message):
             except:
                 pass
     await message.reply_text(f"✨ Unmute Complete! Success accounts: {success}")
-
-@bot.on_message(filters.command("invitec"))
-async def invite_vc_command(client, message):
-    if not is_owner_or_admin(message.from_user.id):
-        return
-    sessions = get_all_sessions()
-    if not sessions:
-        await message.reply_text("❌ Pehle accounts add karein.")
-        return
-    args = message.text.split()
-    if len(args) < 3:
-        await message.reply_text("❌ Format: `/invitec <channel_link> <user_id_or_username>`")
-        return
-    
-    raw_link = args[1].strip()
-    target_user = args[2].strip()
-    status_msg = await message.reply_text(f"👥 VC mein user ko invite kiya ja raha hai...")
-    
-    try:
-        # Pehle account se invite bhejne ki koshish karenge
-        uc = Client(f"vc_inv_{message.id}", api_id=API_ID, api_hash=API_HASH, session_string=sessions[0], in_memory=True)
-        await uc.connect()
-        chat = await uc.get_chat(clean_chat_input(raw_link))
-        peer = await uc.resolve_peer(chat.id)
-        user_to_invite = await uc.get_users(int(target_user) if target_user.isdigit() else target_user)
-        user_peer = await uc.resolve_peer(user_to_invite.id)
-        
-        full_chat = await uc.get_full_chat(chat.id)
-        if full_chat.call:
-            await uc.invoke(InviteToGroupCall(
-                call=InputGroupCall(id=full_chat.call.id, access_hash=full_chat.call.access_hash),
-                users=[user_peer]
-            ))
-            await message.reply_text(f"✅ User ko VC mein successfully invite bhej diya gaya hai!")
-        else:
-            await message.reply_text("❌ Is chat mein koi active Voice Chat nahi mili!")
-        await uc.disconnect()
-    except Exception as e:
-        await message.reply_text(f"⚠️ VC Invite Error: `{e}`")
 
 # ==================== 4. EXECUTION ====================
 if __name__ == "__main__":
