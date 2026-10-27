@@ -1,5 +1,13 @@
-import threading
 import asyncio
+import threading
+
+# PYTHON 3.14 FIX: Pyrogram import hone se pehle event loop set karna zaroori hai
+try:
+    loop = asyncio.get_event_loop()
+except RuntimeError:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
 import sqlite3
 from flask import Flask
 from pyrogram import Client, filters
@@ -226,7 +234,7 @@ async def join_channels(client, message):
 
     await message.reply_text(f"✨ Task Complete! Total successful joins: {success_count}/{len(sessions)}")
 
-# ==================== 4. SAFE RUNNER (Python 3.14 Fix) ====================
+# ==================== 4. EXECUTION ====================
 if __name__ == "__main__":
     # Start Flask in background thread
     flask_thread = threading.Thread(target=run_flask)
@@ -235,14 +243,4 @@ if __name__ == "__main__":
     print("Flask web server running on port 10000...")
 
     print("Telegram Control Bot starting...")
-    # Safe manual loop initialization for Python 3.14
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(bot.start())
-    
-    import idle
-    # Keep bot running safely
-    try:
-        loop.run_forever()
-    except KeyboardInterrupt:
-        loop.run_until_complete(bot.stop())
+    bot.run()
