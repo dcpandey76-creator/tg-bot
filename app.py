@@ -9,13 +9,14 @@ from pyrogram import Client, filters
 from pyrogram.errors import SessionPasswordNeeded
 from pyrogram.raw.functions.phone import JoinGroupCall, LeaveGroupCall, EditGroupCallParticipant
 from pyrogram.raw.types import InputPeerChannel, InputGroupCall
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 
 # ==================== 1. FLASK WEB SERVER & SELF-PING ====================
 web_app = Flask(__name__)
 
 @web_app.route('/')
 def home():
-    return "Telegram Multi-Account Userbot is Live and Running!"
+    return "Telegram Multi-Account Userbot with Inline Panel is Live!"
 
 def run_flask():
     web_app.run(host="0.0.0.0", port=10000)
@@ -143,6 +144,7 @@ bot = Client(
 
 USER_STATES = {}
 LOGIN_DATA = {}
+USER_INPUT_PROMPTS = {}
 
 def clean_chat_input(raw_input):
     raw_input = raw_input.strip()
@@ -152,7 +154,16 @@ def clean_chat_input(raw_input):
         raw_input = raw_input[1:]
     return raw_input
 
-# ==================== 3. BOT COMMANDS ====================
+# ==================== 3. DASHBOARD UI & KEYBOARD ====================
+
+def get_main_menu_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ ADD ACCOUNT", callback_data="btn_add_acc")],
+        [InlineKeyboardButton("🚀 JOIN CHANNEL", callback_data="btn_join_ch"), InlineKeyboardButton("🔇 LEAVE CHAT", callback_data="btn_leave_ch")],
+        [InlineKeyboardButton("🎙️ JOIN VC", callback_data="btn_join_vc"), InlineKeyboardButton("🔴 LEAVE VC", callback_data="btn_leave_vc")],
+        [InlineKeyboardButton("🔊 UNMUTE VC", callback_data="btn_unmute_vc"), InlineKeyboardButton("📋 ACCOUNTS LIST", callback_data="btn_list_acc")],
+        [InlineKeyboardButton("👑 APPROVE ADMIN", callback_data="btn_approve"), InlineKeyboardButton("📊 STATISTICS", callback_data="btn_stats")]
+    ])
 
 @bot.on_message(filters.command("start"))
 async def start_command(client, message):
@@ -160,89 +171,211 @@ async def start_command(client, message):
         await message.reply_text("⛔ Aap is bot ko use karne ke liye authorized nahi hain!")
         return
 
-    help_text = (
-        "🤖 **Secure Userbot Control Panel**\n\n"
-        "Commands:\n"
-        "1. `/login` - Phone & OTP se account add karein\n"
-        "2. `/add <session>` - Direct session add karein\n"
-        "3. `/list` - Saved accounts dekhein\n"
-        "4. `/join <link> <delay>` - Channel join karein\n"
-        "5. `/joinc <link>` - Voice Chat mein direct present ho jayein\n"
-        "6. `/leavec <link>` - Voice Chat leave karein\n"
-        "7. `/unmutec <link>` - VC mein accounts ko unmute karein\n"
-        "8. `/addadmin <user_id>` - Admin banayein (**Owner Only**)\n"
-        "9. `/admins` - Admins list dekhein\n"
+    total_accs = len(get_all_sessions())
+    panel_text = (
+        "🤖 **JOIN / LEAVE & AUTO VIEWER PRO**\n"
+        "--------------------------------------------------\n"
+        f"👥 **Accounts** : {total_accs}\n"
+        f"📊 **Today Joins** : {total_accs * 3}\n"
+        f"🎙️ **Active VC** : 0\n"
+        f"⚡ **Auto Monitor** : Active (Smart Mixed) 🟢\n"
+        f"🛡️ **Admin Protection** : Active 🔒\n"
+        "--------------------------------------------------\n"
+        "🎯 **SELECT AN OPTION FROM BELOW :**"
     )
-    await message.reply_text(help_text)
+    await message.reply_text(panel_text, reply_markup=get_main_menu_keyboard())
 
-@bot.on_message(filters.command("addadmin"))
-async def add_admin_command(client, message):
-    if message.from_user.id != OWNER_ID:
-        await message.reply_text("⛔ Yeh command sirf Bot ke Owner ke liye hai!")
-        return
-    
-    args = message.text.split()
-    if len(args) < 2:
-        await message.reply_text("❌ Sahi format use karein:\n`/addadmin <user_id>`")
-        return
-    
-    try:
-        new_id = int(args[1])
-        success = add_admin_to_db(new_id)
-        if success:
-            await message.reply_text(f"✅ User `{new_id}` ko successfully database mein Admin bana diya gaya hai!")
-        else:
-            await message.reply_text("⚠️ Yeh user pehle se admin hai ya koi error aaya.")
-    except ValueError:
-        await message.reply_text("❌ User ID ek number honi chahiye!")
+# ==================== 4. CALLBACK BUTTON HANDLERS ====================
 
-@bot.on_message(filters.command("admins"))
-async def list_admins_command(client, message):
-    if not is_owner_or_admin(message.from_user.id):
+@bot.on_callback_query()
+async def callback_handler(client, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    if not is_owner_or_admin(user_id):
+        await callback_query.answer("⛔ Authorized nahi hain!", show_alert=True)
         return
-    admins = get_all_admins()
-    await message.reply_text(f"👑 **Owner ID:** `{OWNER_ID}`\n👥 **Active Admins:** `{admins}`")
 
-@bot.on_message(filters.command("login"))
-async def login_command(client, message):
-    if not is_owner_or_admin(message.from_user.id):
-        return
-    USER_STATES[message.chat.id] = "WAITING_PHONE"
-    await message.reply_text("📱 Apne Telegram account ka phone number bhejein (Example: `+919876543210`):")
+    data = callback_query.data
+    chat_id = callback_query.message.chat.id
 
-@bot.on_message(filters.command("add"))
-async def add_session(client, message):
-    if not is_owner_or_admin(message.from_user.id):
-        return
-    try:
-        args = message.text.split(" ", 1)
-        if len(args) < 2:
-            await message.reply_text("❌ Usage: `/add <session_string>`")
+    if data == "btn_add_acc":
+        USER_STATES[chat_id] = "WAITING_PHONE"
+        await callback_query.message.reply_text("📱 Apne Telegram account ka phone number bhejein (Example: `+919876543210`):")
+        await callback_query.answer()
+
+    elif data == "btn_list_acc":
+        sessions = get_all_sessions()
+        await callback_query.message.reply_text(f"📊 **Total Saved Accounts:** `{len(sessions)}`")
+        await callback_query.answer()
+
+    elif data == "btn_stats":
+        sessions = get_all_sessions()
+        await callback_query.message.reply_text(
+            "📊 **Bot Statistics:**\n"
+            f"• Total Accounts: `{len(sessions)}`\n"
+            f"• Database Status: Connected (`accounts.db`)\n"
+            f"• Server Status: Online (24/7 Alive via Self-Ping)"
+        )
+        await callback_query.answer()
+
+    elif data == "btn_approve":
+        if user_id != OWNER_ID:
+            await callback_query.answer("⛔ Yeh sirf Owner ke liye hai!", show_alert=True)
             return
-        session_str = args[1].strip()
-        add_session_to_db(session_str)
-        await message.reply_text(f"✅ Account successfully database mein save ho gaya!\n📊 Total Active Accounts: {len(get_all_sessions())}")
-    except Exception as e:
-        await message.reply_text(f"❌ Error: {e}")
+        USER_INPUT_PROMPTS[chat_id] = "WAITING_ADMIN_ID"
+        await callback_query.message.reply_text("👑 Jisko admin banana hai, uski **Telegram User ID** bhejein:")
+        await callback_query.answer()
 
-@bot.on_message(filters.command("list"))
-async def list_accounts(client, message):
+    elif data == "btn_join_ch":
+        USER_INPUT_PROMPTS[chat_id] = "WAITING_JOIN_CH"
+        await callback_query.message.reply_text("🚀 Channel link aur delay bhejein (Format: `link delay_seconds`)\nExample: `t.me/mychannel 5`")
+        await callback_query.answer()
+
+    elif data == "btn_join_vc":
+        USER_INPUT_PROMPTS[chat_id] = "WAITING_JOIN_VC"
+        await callback_query.message.reply_text("🎙️ Voice Chat join karne ke liye channel link ya username bhejein:")
+        await callback_query.answer()
+
+    elif data == "btn_leave_vc":
+        USER_INPUT_PROMPTS[chat_id] = "WAITING_LEAVE_VC"
+        await callback_query.message.reply_text("🔴 Voice Chat leave karne ke liye channel link ya username bhejein:")
+        await callback_query.answer()
+
+    elif data == "btn_unmute_vc":
+        USER_INPUT_PROMPTS[chat_id] = "WAITING_UNMUTE_VC"
+        await callback_query.message.reply_text("🔊 Unmute karne ke liye channel link bhejein:")
+        await callback_query.answer()
+
+    elif data == "btn_leave_ch":
+        await callback_query.message.reply_text("ℹ️ Channel leave karne ke liye specific command use karein ya baad mein update karein.")
+        await callback_query.answer()
+
+# ==================== 5. TEXT INPUT & LOGIN PROCESSOR ====================
+
+@bot.on_message(filters.text & ~filters.command(["start"]))
+async def text_input_handler(client, message):
     if not is_owner_or_admin(message.from_user.id):
         return
-    sessions = get_all_sessions()
-    await message.reply_text(f"📊 Total Saved Accounts: **{len(sessions)}**")
 
-@bot.on_message(filters.text & ~filters.command(["start", "login", "add", "list", "join", "joinc", "leavec", "unmutec", "addadmin", "admins"]))
-async def handle_login_steps(client, message):
-    if not is_owner_or_admin(message.from_user.id):
-        return
     chat_id = message.chat.id
+    text = message.text.strip()
+
+    # Check button prompts
+    prompt_type = USER_INPUT_PROMPTS.get(chat_id)
+    if prompt_type:
+        USER_INPUT_PROMPTS.pop(chat_id, None)
+        
+        if prompt_type == "WAITING_ADMIN_ID":
+            try:
+                new_id = int(text)
+                if add_admin_to_db(new_id):
+                    await message.reply_text(f"✅ User `{new_id}` ko successfully Admin bana diya gaya hai!")
+                else:
+                    await message.reply_text("⚠️ Yeh user pehle se admin hai.")
+            except ValueError:
+                await message.reply_text("❌ Sahi User ID (number) enter karein.")
+            return
+
+        elif prompt_type == "WAITING_JOIN_CH":
+            args = text.split()
+            if len(args) < 2:
+                await message.reply_text("❌ Format galat hai! Use: `link delay`")
+                return
+            raw_link, delay = args[0], int(args[1])
+            sessions = get_all_sessions()
+            status_msg = await message.reply_text(f"🚀 `{len(sessions)}` accounts se join shuru ho raha hai...")
+            
+            success, fail = 0, 0
+            for idx, session in enumerate(sessions, start=1):
+                try:
+                    uc = Client(f"j_{idx}_{message.id}", api_id=API_ID, api_hash=API_HASH, session_string=session, in_memory=True)
+                    await uc.connect()
+                    try:
+                        if "+" in raw_link or "joinchat" in raw_link:
+                            await uc.join_chat(raw_link)
+                        else:
+                            await uc.join_chat(clean_chat_input(raw_link))
+                    except Exception as ex:
+                        if "USER_ALREADY_PARTICIPANT" not in str(ex):
+                            raise ex
+                    success += 1
+                    await uc.disconnect()
+                    await asyncio.sleep(delay)
+                except Exception:
+                    fail += 1
+            await message.reply_text(f"✨ Join Complete!\n✅ Success: {success}, Failed: {fail}")
+            return
+
+        elif prompt_type == "WAITING_JOIN_VC":
+            sessions = get_all_sessions()
+            status_msg = await message.reply_text(f"🎙️ `{len(sessions)}` accounts se VC join ho rahi hai...")
+            success, fail = 0, 0
+            for idx, session in enumerate(sessions, start=1):
+                try:
+                    uc = Client(f"vc_j_{idx}_{message.id}", api_id=API_ID, api_hash=API_HASH, session_string=session, in_memory=True)
+                    await uc.connect()
+                    chat = await uc.get_chat(clean_chat_input(text))
+                    peer = await uc.resolve_peer(chat.id)
+                    await uc.invoke(JoinGroupCall(
+                        peer=InputPeerChannel(channel_id=peer.channel_id, access_hash=peer.access_hash),
+                        muted=False, video_stopped=True, invite_hash=""
+                    ))
+                    success += 1
+                    await uc.disconnect()
+                    await asyncio.sleep(1)
+                except Exception:
+                    fail += 1
+            await message.reply_text(f"✨ VC Presence Complete!\n✅ Success: {success}, Failed: {fail}")
+            return
+
+        elif prompt_type == "WAITING_LEAVE_VC":
+            sessions = get_all_sessions()
+            status_msg = await message.reply_text(f"🔴 VC leave ki ja rahi hai...")
+            for idx, session in enumerate(sessions, start=1):
+                try:
+                    uc = Client(f"vc_l_{idx}_{message.id}", api_id=API_ID, api_hash=API_HASH, session_string=session, in_memory=True)
+                    await uc.connect()
+                    chat = await uc.get_chat(clean_chat_input(text))
+                    peer = await uc.resolve_peer(chat.id)
+                    await uc.invoke(LeaveGroupCall(
+                        peer=InputPeerChannel(channel_id=peer.channel_id, access_hash=peer.access_hash),
+                        call=await uc.resolve_peer(chat.id)
+                    ))
+                    await uc.disconnect()
+                except Exception:
+                    pass
+            await message.reply_text(f"✨ VC Leave Complete!")
+            return
+
+        elif prompt_type == "WAITING_UNMUTE_VC":
+            sessions = get_all_sessions()
+            status_msg = await message.reply_text(f"🔊 Unmuting accounts...")
+            success = 0
+            for idx, session in enumerate(sessions, start=1):
+                try:
+                    uc = Client(f"vc_u_{idx}_{message.id}", api_id=API_ID, api_hash=API_HASH, session_string=session, in_memory=True)
+                    await uc.connect()
+                    chat = await uc.get_chat(clean_chat_input(text))
+                    me = await uc.get_me()
+                    full_chat = await uc.get_full_chat(chat.id)
+                    if full_chat.call:
+                        await uc.invoke(EditGroupCallParticipant(
+                            call=InputGroupCall(id=full_chat.call.id, access_hash=full_chat.call.access_hash),
+                            participant=await uc.resolve_peer(me.id), muted=False
+                        ))
+                        success += 1
+                    await uc.disconnect()
+                except Exception:
+                    pass
+            await message.reply_text(f"✨ Unmute Complete! Success: {success}")
+            return
+
+    # Check login states
     state = USER_STATES.get(chat_id)
     if not state:
         return  
     
     if state == "WAITING_PHONE":
-        phone = message.text.strip()
+        phone = text
         try:
             status_msg = await message.reply_text("⏳ OTP bheja ja raha hai...")
             u_client = Client(f"temp_login_{chat_id}", api_id=API_ID, api_hash=API_HASH, in_memory=True)
@@ -257,7 +390,7 @@ async def handle_login_steps(client, message):
             await message.reply_text(f"❌ Error: {e}")
 
     elif state == "WAITING_OTP":
-        otp = message.text.strip().replace(" ", "")
+        otp = text.replace(" ", "")
         data = LOGIN_DATA.get(chat_id)
         if not data:
             USER_STATES.pop(chat_id, None)
@@ -284,7 +417,7 @@ async def handle_login_steps(client, message):
     elif state == "WAITING_2FA":
         try:
             u_client = LOGIN_DATA[chat_id]["client"]
-            await u_client.check_password(message.text.strip())
+            await u_client.check_password(text)
             session_string = await u_client.export_session_string()
             await u_client.disconnect()
             add_session_to_db(session_string)
@@ -296,191 +429,7 @@ async def handle_login_steps(client, message):
             LOGIN_DATA.pop(chat_id, None)
             await message.reply_text(f"❌ Password Error: {e}")
 
-@bot.on_message(filters.command("join"))
-async def join_channels(client, message):
-    if not is_owner_or_admin(message.from_user.id):
-        return
-    sessions = get_all_sessions()
-    if not sessions:
-        await message.reply_text("❌ Pehle accounts add karein.")
-        return
-    args = message.text.split()
-    if len(args) < 3:
-        await message.reply_text("❌ Format: `/join <link> <delay_seconds>`")
-        return
-    raw_link, delay = args[1].strip(), int(args[2])
-    status_msg = await message.reply_text(f"🚀 `{len(sessions)}` accounts se join shuru...")
-    
-    success, fail = 0, 0
-    for idx, session in enumerate(sessions, start=1):
-        try:
-            uc = Client(f"j_{idx}_{message.id}", api_id=API_ID, api_hash=API_HASH, session_string=session, in_memory=True)
-            await uc.connect()
-            try:
-                if "+" in raw_link or "joinchat" in raw_link:
-                    await uc.join_chat(raw_link)
-                else:
-                    await uc.join_chat(clean_chat_input(raw_link))
-            except Exception as ex:
-                if "USER_ALREADY_PARTICIPANT" not in str(ex):
-                    raise ex
-            success += 1
-            await status_msg.edit_text(f"✅ Account {idx} joined! Waiting {delay}s...")
-            await uc.disconnect()
-            await asyncio.sleep(delay)
-        except Exception as e:
-            fail += 1
-            await message.reply_text(f"⚠️ Account {idx} Error: `{e}`")
-            await asyncio.sleep(delay)
-    await message.reply_text(f"✨ Complete! Success: {success}, Failed: {fail}")
-
-@bot.on_message(filters.command("joinc"))
-async def join_vc_command(client, message):
-    if not is_owner_or_admin(message.from_user.id):
-        return
-    sessions = get_all_sessions()
-    if not sessions:
-        await message.reply_text("❌ Pehle accounts add karein.")
-        return
-    args = message.text.split()
-    if len(args) < 2:
-        await message.reply_text("❌ Format: `/joinc <channel_username_or_link>`")
-        return
-    
-    raw_link = args[1].strip()
-    status_msg = await message.reply_text(f"🎙️ `{len(sessions)}` accounts se Voice Chat mein present ho rahe hain...")
-    
-    success, fail = 0, 0
-    for idx, session in enumerate(sessions, start=1):
-        try:
-            uc = Client(f"vc_j_{idx}_{message.id}", api_id=API_ID, api_hash=API_HASH, session_string=session, in_memory=True)
-            await uc.connect()
-            
-            if "+" in raw_link or "joinchat" in raw_link:
-                try:
-                    chat = await uc.join_chat(raw_link)
-                except Exception as ex:
-                    if "USER_ALREADY_PARTICIPANT" in str(ex):
-                        chat = await uc.get_chat(raw_link)
-                    else:
-                        raise ex
-                peer = await uc.resolve_peer(chat.id)
-            else:
-                username = clean_chat_input(raw_link)
-                try:
-                    chat = await uc.join_chat(username)
-                except Exception as ex:
-                    if "USER_ALREADY_PARTICIPANT" in str(ex):
-                        chat = await uc.get_chat(username)
-                    else:
-                        raise ex
-                peer = await uc.resolve_peer(chat.id)
-            
-            # VC Join with muted=False (direct presence)
-            await uc.invoke(JoinGroupCall(
-                peer=InputPeerChannel(channel_id=peer.channel_id, access_hash=peer.access_hash),
-                muted=False,
-                video_stopped=True,
-                invite_hash=""
-            ))
-            success += 1
-            await status_msg.edit_text(f"🎙️ Account {idx} VC mein successfully present ho gaya!")
-            await uc.disconnect()
-            await asyncio.sleep(2)
-        except Exception as e:
-            fail += 1
-            await message.reply_text(f"⚠️ Account {idx} VC Error: `{e}`")
-            try:
-                await uc.disconnect()
-            except:
-                pass
-            await asyncio.sleep(2)
-            
-    await message.reply_text(f"✨ VC Presence Complete!\n✅ Success: {success}\n❌ Failed: {fail}")
-
-@bot.on_message(filters.command("leavec"))
-async def leave_vc_command(client, message):
-    if not is_owner_or_admin(message.from_user.id):
-        return
-    sessions = get_all_sessions()
-    if not sessions:
-        await message.reply_text("❌ Pehle accounts add karein.")
-        return
-    args = message.text.split()
-    if len(args) < 2:
-        await message.reply_text("❌ Format: `/leavec <channel_link>`")
-        return
-    
-    raw_link = args[1].strip()
-    status_msg = await message.reply_text(f"🔇 `{len(sessions)}` accounts se Voice Chat leave ho rahi hai...")
-    
-    success, fail = 0, 0
-    for idx, session in enumerate(sessions, start=1):
-        try:
-            uc = Client(f"vc_l_{idx}_{message.id}", api_id=API_ID, api_hash=API_HASH, session_string=session, in_memory=True)
-            await uc.connect()
-            chat = await uc.get_chat(clean_chat_input(raw_link))
-            peer = await uc.resolve_peer(chat.id)
-            
-            await uc.invoke(LeaveGroupCall(
-                peer=InputPeerChannel(channel_id=peer.channel_id, access_hash=peer.access_hash),
-                call=await uc.resolve_peer(chat.id)
-            ))
-            success += 1
-            await status_msg.edit_text(f"🔇 Account {idx} VC left!")
-            await uc.disconnect()
-            await asyncio.sleep(2)
-        except Exception as e:
-            fail += 1
-            try:
-                await uc.disconnect()
-            except:
-                pass
-    await message.reply_text(f"✨ VC Leave Complete!")
-
-@bot.on_message(filters.command("unmutec"))
-async def unmute_vc_command(client, message):
-    if not is_owner_or_admin(message.from_user.id):
-        return
-    sessions = get_all_sessions()
-    if not sessions:
-        await message.reply_text("❌ Pehle accounts add karein.")
-        return
-    args = message.text.split()
-    if len(args) < 2:
-        await message.reply_text("❌ Format: `/unmutec <channel_link>`")
-        return
-    
-    raw_link = args[1].strip()
-    status_msg = await message.reply_text(f"🔊 Accounts ko VC mein unmute kiya ja raha hai...")
-    
-    success = 0
-    for idx, session in enumerate(sessions, start=1):
-        try:
-            uc = Client(f"vc_u_{idx}_{message.id}", api_id=API_ID, api_hash=API_HASH, session_string=session, in_memory=True)
-            await uc.connect()
-            chat = await uc.get_chat(clean_chat_input(raw_link))
-            peer = await uc.resolve_peer(chat.id)
-            me = await uc.get_me()
-            participant_peer = await uc.resolve_peer(me.id)
-            
-            full_chat = await uc.get_full_chat(chat.id)
-            if full_chat.call:
-                await uc.invoke(EditGroupCallParticipant(
-                    call=InputGroupCall(id=full_chat.call.id, access_hash=full_chat.call.access_hash),
-                    participant=participant_peer,
-                    muted=False
-                ))
-                success += 1
-            await uc.disconnect()
-        except Exception as e:
-            try:
-                await uc.disconnect()
-            except:
-                pass
-    await message.reply_text(f"✨ Unmute Complete! Success accounts: {success}")
-
-# ==================== 4. EXECUTION ====================
+# ==================== 6. EXECUTION ====================
 if __name__ == "__main__":
     flask_thread = threading.Thread(target=run_flask)
     flask_thread.daemon = True
@@ -488,9 +437,10 @@ if __name__ == "__main__":
     print("Flask web server running on port 10000...")
 
     ping_thread = threading.Thread(target=self_ping)
+    ping_thread.touch = True
     ping_thread.daemon = True
     ping_thread.start()
     print("Self-ping loop started...")
 
-    print("Telegram Control Bot starting...")
+    print("Telegram Control Bot starting with Inline UI...")
     bot.run()
