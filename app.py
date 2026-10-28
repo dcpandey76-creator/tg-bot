@@ -33,7 +33,7 @@ def self_ping():
 # ==================== 2. CONFIGURATIONS & STORAGE ====================
 API_ID = 39247243  
 API_HASH = "bee07e137cee5341cb61b73a4c3f9137"  
-BOT_TOKEN = "8905516793:AAFZ9OD8KhsmGur87euDtESNRfOuIHMx8jo"  
+BOT_TOKEN = "9115996211:AAHknIPXLSCeY9N7fL3tzOa8bYsT_Ncljss"  
 
 # 👑 Teri Original Telegram User ID
 OWNER_ID = 5406594181  
