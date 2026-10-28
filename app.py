@@ -32,8 +32,8 @@ def self_ping():
 
 # ==================== 2. CONFIGURATIONS & STORAGE ====================
 API_ID = 39247243  
-API_HASH = "bee07e137cee5341cb61b73a4c3f9137"  
-BOT_TOKEN = os.getenv("BOT_TOKEN", "9115996211:AAHknIPXLSCeY9N7fL3tzOa8bYsT_Ncljss")  
+API_HASH = "9115996211:AAHknIPXLSCeY9N7fL3tzOa8bYsT_Ncljss"  
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8905516793:AAFZ9OD8KhsmGur87euDtESNRfOuIHMx8jo")  
 
 # 👑 Teri Original Telegram User ID
 OWNER_ID = 5406594181  
@@ -298,17 +298,17 @@ async def text_input_handler(client, message):
                 await message.reply_text("❌ Sahi format enter karein!")
                 return
             
-            target_chat = clean_chat_input(args[0])
+            raw_link = args[0]
+            target_chat = clean_chat_input(raw_link)
             sessions = get_all_sessions()
             if not sessions:
                 await message.reply_text("❌ Pehle accounts add karein!")
                 return
             
-            # Kitne bnde/accounts bhejne hain uska count select karna
             count = int(args[1]) if len(args) > 1 and args[1].isdigit() else len(sessions)
             sessions_to_use = sessions[:count]
             
-            status_msg = await message.reply_text(f"🎙️ `{len(sessions_to_use)}` accounts se VC join ki koshish ki ja rahi hai...")
+            status_msg = await message.reply_text(f"🎙️ `{len(sessions_to_use)}` accounts se VC join process shuru ho raha hai...")
             
             success, fail = 0, 0
             for idx, session in enumerate(sessions_to_use, start=1):
@@ -317,14 +317,23 @@ async def text_input_handler(client, message):
                     uc = Client(f"vc_j_{idx}_{message.id}", api_id=API_ID, api_hash=API_HASH, session_string=session, in_memory=True)
                     await uc.connect()
                     
+                    # Ensure chat is joined/cached properly
+                    try:
+                        if "+" in raw_link or "joinchat" in raw_link:
+                            await uc.join_chat(raw_link)
+                        else:
+                            await uc.join_chat(target_chat)
+                    except Exception:
+                        pass
+                    
                     chat = await uc.get_chat(target_chat)
                     peer = await uc.resolve_peer(chat.id)
                     
                     full_chat = await uc.get_full_chat(chat.id)
                     if not full_chat.call:
-                        await message.reply_text("❌ Is chat/channel mein koi Active Voice Chat (Group Call) shuru nahi hai!")
+                        fail += 1
                         await uc.disconnect()
-                        return
+                        continue
                     
                     await uc.invoke(JoinGroupCall(
                         peer=InputPeerChannel(channel_id=peer.channel_id, access_hash=peer.access_hash),
